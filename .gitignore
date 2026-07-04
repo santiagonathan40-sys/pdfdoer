@@ -13,3 +13,4 @@ pdfdoer-backend/.env
 pdfdoer-backend/users.db
 pdfdoer-backend/uploads
 pdfdoer-backend/outputs
+pdfdoer-backend/node_modules
