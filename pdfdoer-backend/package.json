@@ -1,0 +1,37 @@
+{
+  "name": "pdfdoer-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "adm-zip": "^0.5.18",
+    "archiver": "^7.0.1",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.11.1",
+    "cors": "^2.8.5",
+    "docx": "^9.7.1",
+    "dotenv": "^17.4.2",
+    "express": "^4.18.3",
+    "helmet": "^7.1.0",
+    "image-size": "^2.0.2",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^9.0.3",
+    "pdf-lib": "^1.17.1",
+    "pdf-poppler": "^0.2.3",
+    "sharp": "^0.33.5",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
