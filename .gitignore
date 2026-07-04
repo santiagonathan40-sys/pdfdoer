@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+node_modules
+dist
+.env
+pdfdoer-backend/.env
+pdfdoer-backend/users.db
+pdfdoer-backend/uploads
+pdfdoer-backend/outputs
