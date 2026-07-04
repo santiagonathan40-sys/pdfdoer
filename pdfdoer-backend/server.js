@@ -16,7 +16,13 @@ const require = createRequire(import.meta.url);
 const AdmZip = require("adm-zip");
 const imageSizePackage = require("image-size");
 const imageSize = imageSizePackage.imageSize || imageSizePackage.default || imageSizePackage;
-const pdfPoppler = require("pdf-poppler");
+const IS_LINUX = process.platform === "linux";
+
+let pdfPoppler = null;
+
+if (!IS_LINUX) {
+  pdfPoppler = require("pdf-poppler");
+}
 const XLSX = require("xlsx");
 const { router: authRoutes, db } = require("./authRoutes.cjs");
 const jwt = require("jsonwebtoken");
