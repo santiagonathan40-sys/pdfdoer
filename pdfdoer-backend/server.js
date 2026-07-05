@@ -23,6 +23,7 @@ let pdfPoppler = null;
 if (!IS_LINUX) {
   pdfPoppler = require("pdf-poppler");
 }
+
 const XLSX = require("xlsx");
 const { router: authRoutes, db } = require("./authRoutes.cjs");
 const jwt = require("jsonwebtoken");
@@ -41,8 +42,17 @@ const fontsDir = path.join(__dirname, "assets", "fonts");
 const LIBREOFFICE_PATH = IS_LINUX
   ? "soffice"
   : "C:\\Program Files\\LibreOffice\\program\\soffice.exe";
-const QPDF_PATH = "C:\\Program Files\\qpdf 12.3.2\\bin\\qpdf.exe";
-const TESSERACT_PATH = "C:\\Program Files\\Tesseract-OCR\\tesseract.exe";
+
+const QPDF_PATH = IS_LINUX
+  ? "qpdf"
+  : "C:\\Program Files\\qpdf 12.3.2\\bin\\qpdf.exe";
+
+const TESSERACT_PATH = IS_LINUX
+  ? "tesseract"
+  : "C:\\Program Files\\Tesseract-OCR\\tesseract.exe";
+
+const GHOSTSCRIPT_PATH = IS_LINUX ? "gs" : "gswin64c";
+const PDFTOPPM_PATH = IS_LINUX ? "pdftoppm" : "";
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
@@ -51,6 +61,7 @@ if (!fs.existsSync(uploadDir)) {
 if (!fs.existsSync(outputDir)) {
   fs.mkdirSync(outputDir, { recursive: true });
 }
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS guest_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +74,7 @@ db.exec(`
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
 function ensureGuestUsageColumns() {
   const columns = db
     .prepare("PRAGMA table_info(guest_usage)")
@@ -85,6 +97,7 @@ function ensureGuestUsageColumns() {
 }
 
 ensureGuestUsageColumns();
+
 app.use(helmet());
 
 const allowedOrigins = [
@@ -102,6 +115,7 @@ app.use(
 
 app.use(express.json());
 app.use("/api/auth", authRoutes);
+
 app.use(
   "/fonts",
   express.static(fontsDir, {
@@ -110,6 +124,7 @@ app.use(
     },
   })
 );
+
 app.use(
   "/outputs",
   express.static(outputDir, {
@@ -162,6 +177,7 @@ function cleanupUploadedFiles(files) {
     }
   }
 }
+
 function getClientIp(req) {
   const forwardedFor = String(req.headers["x-forwarded-for"] || "")
     .split(",")[0]
@@ -336,6 +352,7 @@ function recordSuccessfulUsage(usageContext) {
     remaining: Math.max(0, actionsLimit - actionsUsed),
   };
 }
+
 function safeRemoveFolder(folderPath) {
   try {
     if (folderPath && fs.existsSync(folderPath)) {
@@ -589,6 +606,7 @@ async function signPdf(file, outputPath, options = {}) {
   const outputBytes = await pdf.save();
   fs.writeFileSync(outputPath, outputBytes);
 }
+
 async function annotatePdf(file, outputPath, options = {}) {
   const bytes = fs.readFileSync(file.path);
   const pdf = await PDFDocument.load(bytes);
@@ -696,6 +714,7 @@ async function annotatePdf(file, outputPath, options = {}) {
   const outputBytes = await pdf.save();
   fs.writeFileSync(outputPath, outputBytes);
 }
+
 async function mergePdf(files, outputPath) {
   const mergedPdf = await PDFDocument.create();
 
@@ -787,22 +806,41 @@ async function jpgToPdf(files, outputPath) {
   fs.writeFileSync(outputPath, outputBytes);
 }
 
-async function pdfToJpg(file, outputPath) {
-  const baseOutputName = path.parse(outputPath).name;
-  const outputFolder = path.join(outputDir, baseOutputName);
-
+async function convertPdfToImages(filePath, outputFolder, outputPrefix, format = "png") {
   if (!fs.existsSync(outputFolder)) {
     fs.mkdirSync(outputFolder, { recursive: true });
   }
 
-  const options = {
-    format: "jpeg",
-    out_dir: outputFolder,
-    out_prefix: "page",
-    page: null,
-  };
+  if (IS_LINUX) {
+    const args = [
+      format === "jpeg" ? "-jpeg" : "-png",
+      "-r",
+      "150",
+      filePath,
+      path.join(outputFolder, outputPrefix),
+    ];
 
-  await pdfPoppler.convert(file.path, options);
+    await execFileAsync(PDFTOPPM_PATH, args);
+    return;
+  }
+
+  if (!pdfPoppler) {
+    throw new Error("PDF page conversion engine is not available.");
+  }
+
+  await pdfPoppler.convert(filePath, {
+    format,
+    out_dir: outputFolder,
+    out_prefix: outputPrefix,
+    page: null,
+  });
+}
+
+async function pdfToJpg(file, outputPath) {
+  const baseOutputName = path.parse(outputPath).name;
+  const outputFolder = path.join(outputDir, baseOutputName);
+
+  await convertPdfToImages(file.path, outputFolder, "page", "jpeg");
 
   const zip = new AdmZip();
   const convertedFiles = fs.readdirSync(outputFolder);
@@ -816,6 +854,8 @@ async function pdfToJpg(file, outputPath) {
   });
 
   zip.writeZip(outputPath);
+
+  safeRemoveFolder(outputFolder);
 }
 
 async function compressPdf(file, outputPath, quality = "ebook") {
@@ -833,7 +873,7 @@ async function compressPdf(file, outputPath, quality = "ebook") {
     file.path,
   ];
 
-  await execFileAsync("gswin64c", args);
+  await execFileAsync(GHOSTSCRIPT_PATH, args);
 }
 
 async function wordToPdf(file, outputPath) {
@@ -860,6 +900,7 @@ async function wordToPdf(file, outputPath) {
   );
 
   if (!pdfFile) {
+    safeRemoveFolder(tempOutputFolder);
     throw new Error("LibreOffice did not create a PDF file.");
   }
 
@@ -869,6 +910,7 @@ async function wordToPdf(file, outputPath) {
 
   safeRemoveFolder(tempOutputFolder);
 }
+
 async function pdfToWord(file, outputPath) {
   const tempFolder = path.join(outputDir, `pdf-to-word-${Date.now()}`);
 
@@ -876,14 +918,7 @@ async function pdfToWord(file, outputPath) {
     fs.mkdirSync(tempFolder, { recursive: true });
   }
 
-  const options = {
-    format: "png",
-    out_dir: tempFolder,
-    out_prefix: "page",
-    page: null,
-  };
-
-  await pdfPoppler.convert(file.path, options);
+  await convertPdfToImages(file.path, tempFolder, "page", "png");
 
   const imageFiles = fs
     .readdirSync(tempFolder)
@@ -1024,6 +1059,7 @@ async function pdfToWord(file, outputPath) {
 
   safeRemoveFolder(tempFolder);
 }
+
 function splitTextIntoExcelRows(text) {
   const lines = String(text || "")
     .split(/\r?\n/)
@@ -1058,14 +1094,7 @@ async function pdfToExcel(file, outputPath) {
     fs.mkdirSync(tempFolder, { recursive: true });
   }
 
-  const options = {
-    format: "png",
-    out_dir: tempFolder,
-    out_prefix: "page",
-    page: null,
-  };
-
-  await pdfPoppler.convert(file.path, options);
+  await convertPdfToImages(file.path, tempFolder, "page", "png");
 
   const imageFiles = fs
     .readdirSync(tempFolder)
@@ -1114,6 +1143,27 @@ async function pdfToExcel(file, outputPath) {
 
   safeRemoveFolder(tempFolder);
 }
+
+async function protectPdf(file, outputPath, password = "123456") {
+  const safePassword = String(password || "").trim();
+
+  if (!safePassword) {
+    throw new Error("Please enter a password to protect your PDF.");
+  }
+
+  const args = [
+    "--encrypt",
+    safePassword,
+    safePassword,
+    "256",
+    "--",
+    file.path,
+    outputPath,
+  ];
+
+  await execFileAsync(QPDF_PATH, args);
+}
+
 async function unlockPdf(file, outputPath, password = "") {
   const safePassword = String(password || "").trim();
 
@@ -1177,14 +1227,7 @@ async function ocrPdfFile(file, outputPath) {
     fs.mkdirSync(tempFolder, { recursive: true });
   }
 
-  const options = {
-    format: "png",
-    out_dir: tempFolder,
-    out_prefix: "page",
-    page: null,
-  };
-
-  await pdfPoppler.convert(file.path, options);
+  await convertPdfToImages(file.path, tempFolder, "page", "png");
 
   const imageFiles = fs
     .readdirSync(tempFolder)
@@ -1244,7 +1287,7 @@ app.post("/api/pdf/:toolSlug", upload.array("files", 20), async (req, res) => {
     const { toolSlug } = req.params;
     const options = req.body.options ? JSON.parse(req.body.options) : {};
 
-        if (!files.length) {
+    if (!files.length) {
       return res.status(400).json({
         success: false,
         message: "No files uploaded",
@@ -1443,8 +1486,7 @@ app.post("/api/pdf/:toolSlug", upload.array("files", 20), async (req, res) => {
     }
 
     const stats = fs.statSync(outputPath);
-
-        const updatedUsage = recordSuccessfulUsage(usageContext);
+    const updatedUsage = recordSuccessfulUsage(usageContext);
 
     cleanupUploadedFiles(files);
 
