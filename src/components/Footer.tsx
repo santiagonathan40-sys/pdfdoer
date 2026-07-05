@@ -71,7 +71,7 @@ export default function Footer({ onNavigate }: FooterProps) {
               </div>
               <div>
                 <h4 className="text-sm font-semibold text-white">Automatic Cleanup</h4>
-                <p className="text-xs text-slate-500">Files are permanently auto-deleted after 1 hour</p>
+                <p className="text-xs text-slate-500">Files are permanently auto-deleted</p>
               </div>
             </div>
             <div className="flex items-center space-x-3.5">

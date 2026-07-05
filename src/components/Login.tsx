@@ -274,7 +274,7 @@ export default function Login({ onNavigate, onLogin }: LoginProps) {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="block w-full pl-10 pr-3 py-3 border border-slate-200 rounded-lg text-sm placeholder-slate-400 text-slate-800 focus:outline-none focus:border-blue-500 transition-all bg-slate-50/20"
-                  placeholder="name@company.com"
+                  placeholder="name@email.com"
                 />
               </div>
             </div>

@@ -8,11 +8,13 @@ import {
   Check,
   KeyRound,
 } from "lucide-react";
+import { GoogleLogin } from "@react-oauth/google";
 import type { User } from "../types";
 import {
   registerUser,
   verifyEmailCode,
   resendVerificationCode,
+  googleLoginUser,
 } from "../services/authApi";
 
 interface SignupProps {
@@ -33,6 +35,7 @@ export default function Signup({ onNavigate, onLogin }: SignupProps) {
   const [agreeTerms, setAgreeTerms] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [isResending, setIsResending] = useState(false);
 
@@ -47,6 +50,39 @@ export default function Signup({ onNavigate, onLogin }: SignupProps) {
     });
 
     onNavigate("home");
+  };
+
+  const handleGoogleSuccess = async (credentialResponse: any) => {
+    if (!credentialResponse.credential) {
+      setError("Google signup failed. Please try again.");
+      return;
+    }
+
+    if (!agreeTerms) {
+      setError("Please agree to the Terms and Privacy Policy before continuing with Google.");
+      return;
+    }
+
+    setIsGoogleLoading(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const result = await googleLoginUser({
+        credential: credentialResponse.credential,
+      });
+
+      if (!result.user) {
+        setError("Google signup failed. Please try again.");
+        return;
+      }
+
+      completeLogin(result.user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google signup failed.");
+    } finally {
+      setIsGoogleLoading(false);
+    }
   };
 
   const handleSignupSubmit = async (e: React.FormEvent) => {
@@ -278,8 +314,7 @@ export default function Signup({ onNavigate, onLogin }: SignupProps) {
           </h2>
 
           <p className="mt-2 text-sm text-slate-500">
-            Create your PDFDoer account, track your actions, and upgrade when
-            you need more power.
+            Create your PDFDoer account with Google or verify your email with a secure code.
           </p>
         </div>
 
@@ -294,6 +329,38 @@ export default function Signup({ onNavigate, onLogin }: SignupProps) {
             {message}
           </div>
         )}
+
+        <div className="space-y-3">
+          <div className="flex justify-center">
+            <GoogleLogin
+              onSuccess={handleGoogleSuccess}
+              onError={() => setError("Google signup failed. Please try again.")}
+              useOneTap={false}
+              theme="outline"
+              size="large"
+              text="signup_with"
+              shape="rectangular"
+            />
+          </div>
+
+          {isGoogleLoading && (
+            <p className="text-center text-xs text-slate-500">
+              Creating account with Google...
+            </p>
+          )}
+        </div>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-slate-200" />
+          </div>
+
+          <div className="relative flex justify-center text-xs">
+            <span className="bg-white px-3 text-slate-400">
+              or create account with email
+            </span>
+          </div>
+        </div>
 
         <form
           className="mt-8 space-y-6"
@@ -388,8 +455,7 @@ export default function Signup({ onNavigate, onLogin }: SignupProps) {
                   </h3>
 
                   <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                    Your account starts on the Free plan. Pro upgrades will be
-                    handled securely through payment checkout.
+                    Google signups are verified automatically. Email signups require a 6-digit verification code.
                   </p>
                 </div>
               </div>
@@ -439,7 +505,7 @@ export default function Signup({ onNavigate, onLogin }: SignupProps) {
 
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={isLoading || isGoogleLoading}
             className="w-full flex justify-center items-center space-x-2 py-3 px-4 border border-transparent rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all cursor-pointer shadow-[0_4px_6px_-1px_rgba(37,99,235,0.2)] disabled:bg-slate-300 disabled:cursor-not-allowed"
             id="btn-submit-signup"
           >
