@@ -1,4 +1,6 @@
-const API_BASE_URL = "http://localhost:5000/api/auth";
+const API_BASE_URL = `${
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:5000"
+}/api/auth`;
 
 export type AuthUser = {
   id?: number;
@@ -190,4 +192,12 @@ export async function incrementGuestUsage() {
     method: "POST",
     body: JSON.stringify({}),
   });
+}
+interface ImportMetaEnv {
+  readonly VITE_API_BASE_URL: string;
+  readonly VITE_APP_NAME?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
 }
