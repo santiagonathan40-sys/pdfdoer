@@ -7,12 +7,15 @@ const jwt = require("jsonwebtoken");
 const path = require("path");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
+const { OAuth2Client } = require("google-auth-library");
 
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || "pdfdoer_local_secret_change_later";
 const ADMIN_EMAIL = "pdfdoeradmin@gmail.com";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "303030";
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 
 const SMTP_HOST = process.env.SMTP_HOST || "";
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
@@ -21,8 +24,10 @@ const SMTP_PASS = process.env.SMTP_PASS || "";
 const SMTP_FROM =
   process.env.SMTP_FROM || SMTP_USER || "PDFDoer <no-reply@pdfdoer.local>";
 
-const dbPath = path.join(__dirname, "users.db");
+const dbPath = process.env.SQLITE_DB_PATH || path.join(__dirname, "users.db");
 const db = new Database(dbPath);
+
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -102,17 +107,37 @@ function ensureGuestUsageTable() {
 ensureColumn("users", "email_verified", "INTEGER DEFAULT 0");
 ensureColumn("users", "verification_token", "TEXT DEFAULT ''");
 ensureColumn("users", "verification_expires", "TEXT DEFAULT ''");
+ensureColumn("users", "verification_code", "TEXT DEFAULT ''");
+ensureColumn("users", "verification_code_expires", "TEXT DEFAULT ''");
 ensureColumn("users", "reset_password_token", "TEXT DEFAULT ''");
 ensureColumn("users", "reset_password_expires", "TEXT DEFAULT ''");
+ensureColumn("users", "reset_password_code", "TEXT DEFAULT ''");
+ensureColumn("users", "reset_password_code_expires", "TEXT DEFAULT ''");
 ensureColumn("users", "auth_provider", "TEXT DEFAULT 'email'");
 ensureColumn("users", "google_id", "TEXT DEFAULT ''");
 ensureColumn("users", "updated_at", "TEXT DEFAULT ''");
 
 ensureGuestUsageTable();
 
+function createSixDigitCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function createExpiry(minutes = 15) {
+  const expires = new Date();
+  expires.setMinutes(expires.getMinutes() + minutes);
+  return expires.toISOString();
+}
+
+function isExpired(expiryValue) {
+  if (!expiryValue) return true;
+
+  const expiryDate = new Date(expiryValue);
+  return Number.isNaN(expiryDate.getTime()) || expiryDate.getTime() < Date.now();
+}
+
 function ensureAdminAccount() {
-  const adminPassword = "303030";
-  const passwordHash = bcrypt.hashSync(adminPassword, 10);
+  const passwordHash = bcrypt.hashSync(ADMIN_PASSWORD, 10);
 
   const existingAdmin = db
     .prepare("SELECT * FROM users WHERE email = ?")
@@ -125,6 +150,7 @@ function ensureAdminAccount() {
           email_verified = 1,
           tier = 'pro',
           actions_limit = 999,
+          auth_provider = 'email',
           updated_at = CURRENT_TIMESTAMP
       WHERE email = ?
     `).run(passwordHash, ADMIN_EMAIL);
@@ -143,10 +169,17 @@ function ensureAdminAccount() {
       email_verified,
       verification_token,
       verification_expires,
+      verification_code,
+      verification_code_expires,
+      reset_password_token,
+      reset_password_expires,
+      reset_password_code,
+      reset_password_code_expires,
       auth_provider,
+      google_id,
       updated_at
     )
-    VALUES (?, ?, 'PDFDoer Admin', 'pro', 0, 999, 1, '', '', 'email', CURRENT_TIMESTAMP)
+    VALUES (?, ?, 'PDFDoer Admin', 'pro', 0, 999, 1, '', '', '', '', '', '', '', '', 'email', '', CURRENT_TIMESTAMP)
   `).run(ADMIN_EMAIL, passwordHash);
 }
 
@@ -220,23 +253,6 @@ function createToken(user) {
   );
 }
 
-function createVerificationToken() {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-function createVerificationExpiry() {
-  const expires = new Date();
-  expires.setHours(expires.getHours() + 24);
-  return expires.toISOString();
-}
-
-function isVerificationExpired(expiryValue) {
-  if (!expiryValue) return true;
-
-  const expiryDate = new Date(expiryValue);
-  return Number.isNaN(expiryDate.getTime()) || expiryDate.getTime() < Date.now();
-}
-
 function cleanUser(user) {
   return {
     id: user.id,
@@ -255,20 +271,8 @@ function hasSmtpConfig() {
   return Boolean(SMTP_HOST && SMTP_USER && SMTP_PASS);
 }
 
-async function sendVerificationEmail(userEmail, verificationToken) {
-  const verificationUrl = `${FRONTEND_URL}/verify-email?token=${verificationToken}`;
-
-  if (!hasSmtpConfig()) {
-    console.log("SMTP is not configured. Dev verification link:");
-    console.log(verificationUrl);
-
-    return {
-      sent: false,
-      devVerificationUrl: verificationUrl,
-    };
-  }
-
-  const transporter = nodemailer.createTransport({
+function createTransporter() {
+  return nodemailer.createTransport({
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
@@ -277,31 +281,76 @@ async function sendVerificationEmail(userEmail, verificationToken) {
       pass: SMTP_PASS,
     },
   });
+}
+
+async function sendEmail({ to, subject, html }) {
+  if (!hasSmtpConfig()) {
+    console.log("SMTP is not configured. Email not sent.");
+    console.log("To:", to);
+    console.log("Subject:", subject);
+    return {
+      sent: false,
+    };
+  }
+
+  const transporter = createTransporter();
 
   await transporter.sendMail({
     from: SMTP_FROM,
+    to,
+    subject,
+    html,
+  });
+
+  return {
+    sent: true,
+  };
+}
+
+async function sendVerificationCodeEmail(userEmail, code) {
+  const result = await sendEmail({
     to: userEmail,
-    subject: "Verify your PDFDoer account",
+    subject: "Your PDFDoer verification code",
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
         <h2 style="color: #0f172a;">Verify your PDFDoer account</h2>
         <p style="color: #475569; line-height: 1.6;">
-          Thanks for creating your PDFDoer account. Please verify your email address to activate your free account.
+          Use this verification code to activate your PDFDoer account.
         </p>
-        <a href="${verificationUrl}" style="display: inline-block; background: #2563eb; color: #ffffff; padding: 12px 18px; border-radius: 10px; text-decoration: none; font-weight: bold;">
-          Verify Email
-        </a>
-        <p style="color: #64748b; font-size: 13px; line-height: 1.6; margin-top: 20px;">
-          This verification link expires in 24 hours.
+        <div style="font-size: 32px; letter-spacing: 8px; font-weight: bold; color: #2563eb; background: #eff6ff; padding: 18px; border-radius: 12px; text-align: center; margin: 24px 0;">
+          ${code}
+        </div>
+        <p style="color: #64748b; font-size: 13px; line-height: 1.6;">
+          This code expires in 15 minutes. If you did not create a PDFDoer account, you can ignore this email.
         </p>
       </div>
     `,
   });
 
-  return {
-    sent: true,
-    devVerificationUrl: "",
-  };
+  return result;
+}
+
+async function sendPasswordResetCodeEmail(userEmail, code) {
+  const result = await sendEmail({
+    to: userEmail,
+    subject: "Your PDFDoer password reset code",
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #0f172a;">Reset your PDFDoer password</h2>
+        <p style="color: #475569; line-height: 1.6;">
+          Use this code to reset your PDFDoer password.
+        </p>
+        <div style="font-size: 32px; letter-spacing: 8px; font-weight: bold; color: #2563eb; background: #eff6ff; padding: 18px; border-radius: 12px; text-align: center; margin: 24px 0;">
+          ${code}
+        </div>
+        <p style="color: #64748b; font-size: 13px; line-height: 1.6;">
+          This code expires in 15 minutes. If you did not request a password reset, you can ignore this email.
+        </p>
+      </div>
+    `,
+  });
+
+  return result;
 }
 
 function authMiddleware(req, res, next) {
@@ -472,8 +521,8 @@ router.post("/register", async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const verificationToken = createVerificationToken();
-    const verificationExpires = createVerificationExpiry();
+    const verificationCode = createSixDigitCode();
+    const verificationCodeExpires = createExpiry(15);
 
     const result = db
       .prepare(`
@@ -487,28 +536,36 @@ router.post("/register", async (req, res) => {
           email_verified,
           verification_token,
           verification_expires,
+          verification_code,
+          verification_code_expires,
+          reset_password_token,
+          reset_password_expires,
+          reset_password_code,
+          reset_password_code_expires,
           auth_provider,
+          google_id,
           updated_at
         )
-        VALUES (?, ?, ?, 'free', 0, 10, 0, ?, ?, 'email', CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, 'free', 0, 10, 0, '', '', ?, ?, '', '', '', '', 'email', '', CURRENT_TIMESTAMP)
       `)
-      .run(email, passwordHash, name, verificationToken, verificationExpires);
+      .run(email, passwordHash, name, verificationCode, verificationCodeExpires);
 
     const user = db
       .prepare("SELECT * FROM users WHERE id = ?")
       .get(result.lastInsertRowid);
 
-    const emailResult = await sendVerificationEmail(email, verificationToken);
+    const emailResult = await sendVerificationCodeEmail(email, verificationCode);
     const token = createToken(user);
 
     return res.json({
       success: true,
       message: emailResult.sent
-        ? "Account created. Please check your email to verify your account."
-        : "Account created. SMTP is not configured, so use the dev verification link.",
+        ? "Account created. Please check your email for the 6-digit verification code."
+        : `Account created. SMTP is not configured. Dev verification code: ${verificationCode}`,
       token,
       user: cleanUser(user),
-      devVerificationUrl: emailResult.devVerificationUrl || undefined,
+      requiresVerification: true,
+      devVerificationCode: emailResult.sent ? undefined : verificationCode,
     });
   } catch (error) {
     console.error("Register error:", error);
@@ -516,6 +573,147 @@ router.post("/register", async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to create account.",
+    });
+  }
+});
+
+router.post("/verify-email-code", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const code = String(req.body.code || "").trim();
+
+    if (!email || !code) {
+      return res.status(400).json({
+        success: false,
+        message: "Email and verification code are required.",
+      });
+    }
+
+    const user = db
+      .prepare("SELECT * FROM users WHERE email = ?")
+      .get(email);
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "No account found with that email.",
+      });
+    }
+
+    if (user.email_verified) {
+      const token = createToken(user);
+
+      return res.json({
+        success: true,
+        message: "Email is already verified.",
+        token,
+        user: cleanUser(user),
+      });
+    }
+
+    if (String(user.verification_code || "") !== code) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid verification code.",
+      });
+    }
+
+    if (isExpired(user.verification_code_expires)) {
+      return res.status(400).json({
+        success: false,
+        message: "Verification code expired. Please request a new code.",
+      });
+    }
+
+    db.prepare(`
+      UPDATE users
+      SET email_verified = 1,
+          verification_code = '',
+          verification_code_expires = '',
+          verification_token = '',
+          verification_expires = '',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(user.id);
+
+    const updatedUser = db
+      .prepare("SELECT * FROM users WHERE id = ?")
+      .get(user.id);
+
+    const token = createToken(updatedUser);
+
+    return res.json({
+      success: true,
+      message: "Email verified successfully.",
+      token,
+      user: cleanUser(updatedUser),
+    });
+  } catch (error) {
+    console.error("Verify email code error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to verify email.",
+    });
+  }
+});
+
+router.post("/resend-verification-code", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email address is required.",
+      });
+    }
+
+    const user = db
+      .prepare("SELECT * FROM users WHERE email = ?")
+      .get(email);
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "No account found with that email.",
+      });
+    }
+
+    if (user.email_verified) {
+      return res.json({
+        success: true,
+        message: "Your email is already verified.",
+        user: cleanUser(user),
+      });
+    }
+
+    const verificationCode = createSixDigitCode();
+    const verificationCodeExpires = createExpiry(15);
+
+    db.prepare(`
+      UPDATE users
+      SET verification_code = ?,
+          verification_code_expires = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(verificationCode, verificationCodeExpires, user.id);
+
+    const emailResult = await sendVerificationCodeEmail(email, verificationCode);
+
+    return res.json({
+      success: true,
+      message: emailResult.sent
+        ? "A new verification code has been sent to your email."
+        : `SMTP is not configured. Dev verification code: ${verificationCode}`,
+      devVerificationCode: emailResult.sent ? undefined : verificationCode,
+    });
+  } catch (error) {
+    console.error("Resend verification code error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to resend verification code.",
     });
   }
 });
@@ -543,6 +741,13 @@ router.post("/login", async (req, res) => {
       });
     }
 
+    if (user.auth_provider === "google" && !user.password_hash) {
+      return res.status(400).json({
+        success: false,
+        message: "This account uses Google login. Please continue with Google.",
+      });
+    }
+
     const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
 
     if (!isPasswordCorrect) {
@@ -558,9 +763,10 @@ router.post("/login", async (req, res) => {
       success: true,
       message: user.email_verified
         ? "Login successful."
-        : "Login successful. Please verify your email to activate account actions.",
+        : "Login successful. Please verify your email to activate your account.",
       token,
       user: cleanUser(user),
+      requiresVerification: !user.email_verified,
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -572,61 +778,249 @@ router.post("/login", async (req, res) => {
   }
 });
 
-router.get("/verify-email", (req, res) => {
+router.post("/google-login", async (req, res) => {
   try {
-    const token = String(req.query.token || "").trim();
+    const credential = String(req.body.credential || "").trim();
 
-    if (!token) {
+    if (!credential) {
       return res.status(400).json({
         success: false,
-        message: "Verification token is required.",
+        message: "Google credential is required.",
+      });
+    }
+
+    if (!GOOGLE_CLIENT_ID) {
+      return res.status(500).json({
+        success: false,
+        message: "Google login is not configured on the server.",
+      });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+
+    if (!payload || !payload.email) {
+      return res.status(400).json({
+        success: false,
+        message: "Unable to verify Google account.",
+      });
+    }
+
+    const email = String(payload.email).trim().toLowerCase();
+    const googleId = String(payload.sub || "");
+    const name = String(payload.name || email.split("@")[0] || "");
+
+    let user = db
+      .prepare("SELECT * FROM users WHERE email = ?")
+      .get(email);
+
+    if (user) {
+      db.prepare(`
+        UPDATE users
+        SET google_id = ?,
+            auth_provider = CASE
+              WHEN auth_provider = 'email' THEN 'email'
+              ELSE 'google'
+            END,
+            email_verified = 1,
+            name = CASE
+              WHEN name IS NULL OR name = '' THEN ?
+              ELSE name
+            END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(googleId, name, user.id);
+
+      user = db
+        .prepare("SELECT * FROM users WHERE id = ?")
+        .get(user.id);
+    } else {
+      const randomPasswordHash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
+
+      const result = db.prepare(`
+        INSERT INTO users (
+          email,
+          password_hash,
+          name,
+          tier,
+          actions_used,
+          actions_limit,
+          email_verified,
+          verification_token,
+          verification_expires,
+          verification_code,
+          verification_code_expires,
+          reset_password_token,
+          reset_password_expires,
+          reset_password_code,
+          reset_password_code_expires,
+          auth_provider,
+          google_id,
+          updated_at
+        )
+        VALUES (?, ?, ?, 'free', 0, 10, 1, '', '', '', '', '', '', '', '', 'google', ?, CURRENT_TIMESTAMP)
+      `).run(email, randomPasswordHash, name, googleId);
+
+      user = db
+        .prepare("SELECT * FROM users WHERE id = ?")
+        .get(result.lastInsertRowid);
+    }
+
+    const token = createToken(user);
+
+    return res.json({
+      success: true,
+      message: "Google login successful.",
+      token,
+      user: cleanUser(user),
+    });
+  } catch (error) {
+    console.error("Google login error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to login with Google.",
+    });
+  }
+});
+
+router.post("/forgot-password", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email address is required.",
       });
     }
 
     const user = db
-      .prepare("SELECT * FROM users WHERE verification_token = ?")
-      .get(token);
+      .prepare("SELECT * FROM users WHERE email = ?")
+      .get(email);
+
+    if (!user) {
+      return res.json({
+        success: true,
+        message: "If that email exists, a reset code has been sent.",
+      });
+    }
+
+    const resetCode = createSixDigitCode();
+    const resetCodeExpires = createExpiry(15);
+
+    db.prepare(`
+      UPDATE users
+      SET reset_password_code = ?,
+          reset_password_code_expires = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(resetCode, resetCodeExpires, user.id);
+
+    const emailResult = await sendPasswordResetCodeEmail(email, resetCode);
+
+    return res.json({
+      success: true,
+      message: emailResult.sent
+        ? "A password reset code has been sent to your email."
+        : `SMTP is not configured. Dev reset code: ${resetCode}`,
+      devResetCode: emailResult.sent ? undefined : resetCode,
+    });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to send password reset code.",
+    });
+  }
+});
+
+router.post("/reset-password", async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const code = String(req.body.code || "").trim();
+    const newPassword = String(req.body.newPassword || "").trim();
+
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Email, reset code, and new password are required.",
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters.",
+      });
+    }
+
+    const user = db
+      .prepare("SELECT * FROM users WHERE email = ?")
+      .get(email);
 
     if (!user) {
       return res.status(400).json({
         success: false,
-        message: "Invalid verification token.",
+        message: "Invalid reset code.",
       });
     }
 
-    if (isVerificationExpired(user.verification_expires)) {
+    if (String(user.reset_password_code || "") !== code) {
       return res.status(400).json({
         success: false,
-        message: "Verification link expired. Please request a new verification email.",
+        message: "Invalid reset code.",
       });
     }
+
+    if (isExpired(user.reset_password_code_expires)) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset code expired. Please request a new code.",
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
 
     db.prepare(`
       UPDATE users
-      SET email_verified = 1,
-          verification_token = '',
-          verification_expires = '',
+      SET password_hash = ?,
+          reset_password_code = '',
+          reset_password_code_expires = '',
+          reset_password_token = '',
+          reset_password_expires = '',
+          auth_provider = CASE
+            WHEN auth_provider = 'google' THEN 'email'
+            ELSE auth_provider
+          END,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(user.id);
-
-    const updatedUser = db
-      .prepare("SELECT * FROM users WHERE id = ?")
-      .get(user.id);
+    `).run(passwordHash, user.id);
 
     return res.json({
       success: true,
-      message: "Email verified successfully.",
-      user: cleanUser(updatedUser),
+      message: "Password reset successful. You can now login with your new password.",
     });
   } catch (error) {
-    console.error("Verify email error:", error);
+    console.error("Reset password error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Unable to verify email.",
+      message: "Unable to reset password.",
     });
   }
+});
+
+router.get("/verify-email", (req, res) => {
+  return res.status(410).json({
+    success: false,
+    message: "Email verification now uses a 6-digit code.",
+  });
 });
 
 router.post("/resend-verification", authMiddleware, async (req, res) => {
@@ -639,32 +1033,32 @@ router.post("/resend-verification", authMiddleware, async (req, res) => {
       });
     }
 
-    const verificationToken = createVerificationToken();
-    const verificationExpires = createVerificationExpiry();
+    const verificationCode = createSixDigitCode();
+    const verificationCodeExpires = createExpiry(15);
 
     db.prepare(`
       UPDATE users
-      SET verification_token = ?,
-          verification_expires = ?,
+      SET verification_code = ?,
+          verification_code_expires = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(verificationToken, verificationExpires, req.user.id);
+    `).run(verificationCode, verificationCodeExpires, req.user.id);
 
-    const emailResult = await sendVerificationEmail(req.user.email, verificationToken);
+    const emailResult = await sendVerificationCodeEmail(req.user.email, verificationCode);
 
     return res.json({
       success: true,
       message: emailResult.sent
-        ? "Verification email sent."
-        : "SMTP is not configured, so use the dev verification link.",
-      devVerificationUrl: emailResult.devVerificationUrl || undefined,
+        ? "Verification code sent."
+        : `SMTP is not configured. Dev verification code: ${verificationCode}`,
+      devVerificationCode: emailResult.sent ? undefined : verificationCode,
     });
   } catch (error) {
     console.error("Resend verification error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Unable to resend verification email.",
+      message: "Unable to resend verification code.",
     });
   }
 });
@@ -845,5 +1239,6 @@ router.post("/admin/downgrade-user", authMiddleware, adminOnly, (req, res) => {
 module.exports = {
   router,
   authMiddleware,
+  verifiedUserOnly,
   db,
 };

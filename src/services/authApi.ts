@@ -9,6 +9,8 @@ export type AuthUser = {
   tier: "free" | "pro";
   actionsUsed?: number;
   actionsLimit?: number;
+  emailVerified?: boolean;
+  authProvider?: "email" | "google";
   createdAt?: string;
 };
 
@@ -23,11 +25,31 @@ type LoginPayload = {
   password: string;
 };
 
+type VerifyEmailCodePayload = {
+  email: string;
+  code: string;
+};
+
+type ForgotPasswordPayload = {
+  email: string;
+};
+
+type ResetPasswordPayload = {
+  email: string;
+  code: string;
+  newPassword: string;
+};
+
+type GoogleLoginPayload = {
+  credential: string;
+};
+
 type AuthResponse = {
   success: boolean;
   message?: string;
   token?: string;
   user?: AuthUser;
+  requiresVerification?: boolean;
 };
 
 type UsageResponse = {
@@ -66,7 +88,10 @@ async function request<T>(
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
-    headers,
+    headers: {
+      ...headers,
+      ...(options.headers || {}),
+    },
   });
 
   const data = await response.json().catch(() => null);
@@ -108,12 +133,7 @@ export function logoutUser() {
   localStorage.removeItem(USER_KEY);
 }
 
-export async function registerUser(payload: RegisterPayload) {
-  const data = await request<AuthResponse>("/register", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
+function saveAuthData(data: AuthResponse) {
   if (data.token) {
     saveAuthToken(data.token);
   }
@@ -121,6 +141,15 @@ export async function registerUser(payload: RegisterPayload) {
   if (data.user) {
     saveUser(data.user);
   }
+}
+
+export async function registerUser(payload: RegisterPayload) {
+  const data = await request<AuthResponse>("/register", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  saveAuthData(data);
 
   return data;
 }
@@ -131,15 +160,52 @@ export async function loginUser(payload: LoginPayload) {
     body: JSON.stringify(payload),
   });
 
-  if (data.token) {
-    saveAuthToken(data.token);
-  }
-
-  if (data.user) {
-    saveUser(data.user);
-  }
+  saveAuthData(data);
 
   return data;
+}
+
+export async function googleLoginUser(payload: GoogleLoginPayload) {
+  const data = await request<AuthResponse>("/google-login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  saveAuthData(data);
+
+  return data;
+}
+
+export async function verifyEmailCode(payload: VerifyEmailCodePayload) {
+  const data = await request<AuthResponse>("/verify-email-code", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  saveAuthData(data);
+
+  return data;
+}
+
+export async function resendVerificationCode(email: string) {
+  return request<AuthResponse>("/resend-verification-code", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function forgotPassword(payload: ForgotPasswordPayload) {
+  return request<AuthResponse>("/forgot-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function resetPassword(payload: ResetPasswordPayload) {
+  return request<AuthResponse>("/reset-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function getCurrentUser() {
@@ -192,12 +258,4 @@ export async function incrementGuestUsage() {
     method: "POST",
     body: JSON.stringify({}),
   });
-}
-interface ImportMetaEnv {
-  readonly VITE_API_BASE_URL: string;
-  readonly VITE_APP_NAME?: string;
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
 }

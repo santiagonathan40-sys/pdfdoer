@@ -5,8 +5,8 @@ uploads/
 outputs/
 pdfdoer-backend/node_modules/
 pdfdoer-backend/uploads/
-pdfdoer-backend/outputs/
 pdfdoer-backend/users.db
 pdfdoer-frontend-clean/node_modules/
 dist/
 .DS_Store
+pdfdoer-backend/outputs

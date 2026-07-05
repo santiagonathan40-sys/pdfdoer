@@ -69,7 +69,7 @@ export default function ProcessingState({ toolSlug }: ProcessingStateProps) {
       
       <div className="flex items-center space-x-2 rounded-lg bg-slate-50 border border-slate-200 px-4.5 py-2.5 text-xs text-slate-400 font-medium">
         <Shield size={13} className="text-emerald-500" />
-        <span>DocFlow uses end-to-end sandbox sessions. Your document never hits disk logs.</span>
+        <span>PDFDOER uses end-to-end sandbox sessions. Your document never hits disk logs.</span>
       </div>
     </div>
   );
