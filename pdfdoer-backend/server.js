@@ -31,6 +31,7 @@ const jwt = require("jsonwebtoken");
 const execFileAsync = promisify(execFile);
 
 const app = express();
+app.set("trust proxy", true);
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || "pdfdoer_local_secret_change_later";
 
@@ -163,7 +164,11 @@ function getBaseName(fileName) {
 }
 
 function getFileUrl(req, fileName) {
-  return `${req.protocol}://${req.get("host")}/outputs/${fileName}`;
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protocol = forwardedProto || req.protocol || "https";
+  const host = req.get("host");
+
+  return `${protocol}://${host}/outputs/${encodeURIComponent(fileName)}`;
 }
 
 function cleanupUploadedFiles(files) {
