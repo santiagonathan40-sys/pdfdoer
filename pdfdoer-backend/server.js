@@ -37,7 +37,11 @@ const __dirname = process.cwd();
 const uploadDir = path.join(__dirname, "uploads");
 const outputDir = path.join(__dirname, "outputs");
 const fontsDir = path.join(__dirname, "assets", "fonts");
-const LIBREOFFICE_PATH = "C:\\Program Files\\LibreOffice\\program\\soffice.exe";
+const IS_LINUX = process.platform === "linux";
+
+const LIBREOFFICE_PATH = IS_LINUX
+  ? "soffice"
+  : "C:\\Program Files\\LibreOffice\\program\\soffice.exe";
 const QPDF_PATH = "C:\\Program Files\\qpdf 12.3.2\\bin\\qpdf.exe";
 const TESSERACT_PATH = "C:\\Program Files\\Tesseract-OCR\\tesseract.exe";
 
