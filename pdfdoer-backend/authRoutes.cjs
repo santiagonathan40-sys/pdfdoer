@@ -110,14 +110,47 @@ ensureColumn("users", "updated_at", "TEXT DEFAULT ''");
 
 ensureGuestUsageTable();
 
-db.prepare(`
-  UPDATE users
-  SET email_verified = 1,
-      tier = 'pro',
-      actions_limit = 999,
-      updated_at = CURRENT_TIMESTAMP
-  WHERE email = ?
-`).run(ADMIN_EMAIL);
+function ensureAdminAccount() {
+  const adminPassword = "303030";
+  const passwordHash = bcrypt.hashSync(adminPassword, 10);
+
+  const existingAdmin = db
+    .prepare("SELECT * FROM users WHERE email = ?")
+    .get(ADMIN_EMAIL);
+
+  if (existingAdmin) {
+    db.prepare(`
+      UPDATE users
+      SET password_hash = ?,
+          email_verified = 1,
+          tier = 'pro',
+          actions_limit = 999,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE email = ?
+    `).run(passwordHash, ADMIN_EMAIL);
+
+    return;
+  }
+
+  db.prepare(`
+    INSERT INTO users (
+      email,
+      password_hash,
+      name,
+      tier,
+      actions_used,
+      actions_limit,
+      email_verified,
+      verification_token,
+      verification_expires,
+      auth_provider,
+      updated_at
+    )
+    VALUES (?, ?, 'PDFDoer Admin', 'pro', 0, 999, 1, '', '', 'email', CURRENT_TIMESTAMP)
+  `).run(ADMIN_EMAIL, passwordHash);
+}
+
+ensureAdminAccount();
 
 function getClientIp(req) {
   const forwardedFor = req.headers["x-forwarded-for"];
