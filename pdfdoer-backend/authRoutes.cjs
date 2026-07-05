@@ -498,7 +498,30 @@ router.post("/guest-increment-usage", (req, res) => {
     });
   }
 });
+async function addContactToBrevo({ email, name }) {
+  if (!process.env.BREVO_API_KEY) return;
 
+  const response = await fetch("https://api.brevo.com/v3/contacts", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "api-key": process.env.BREVO_API_KEY,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      email,
+      attributes: {
+        FIRSTNAME: name || "",
+      },
+      updateEnabled: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Brevo contact failed:", errorText);
+  }
+}
 router.post("/register", async (req, res) => {
   try {
     const email = String(req.body.email || "").trim().toLowerCase();
@@ -563,6 +586,16 @@ router.post("/register", async (req, res) => {
     const user = db
       .prepare("SELECT * FROM users WHERE id = ?")
       .get(result.lastInsertRowid);
+
+    // Add new registrant to Brevo CRM
+    try {
+      await addContactToBrevo({
+        email,
+        name,
+      });
+    } catch (err) {
+      console.error("Unable to add contact to Brevo:", err);
+    }
 
     const emailResult = await sendVerificationCodeEmail(email, verificationCode);
     const token = createToken(user);
