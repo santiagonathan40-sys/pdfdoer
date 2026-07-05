@@ -285,27 +285,36 @@ function createTransporter() {
 }
 
 async function sendEmail({ to, subject, html }) {
-  if (!hasSmtpConfig()) {
-    console.log("SMTP is not configured. Email not sent.");
-    console.log("To:", to);
-    console.log("Subject:", subject);
-    return {
-      sent: false,
-    };
+  if (!process.env.BREVO_API_KEY) {
+    console.log("Brevo API key is not configured. Email not sent.");
+    return { sent: false };
   }
 
-  const transporter = createTransporter();
-
-  await transporter.sendMail({
-    from: SMTP_FROM,
-    to,
-    subject,
-    html,
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "api-key": process.env.BREVO_API_KEY,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      sender: {
+        name: process.env.SMTP_FROM_NAME || "PDFDoer",
+        email: process.env.SMTP_FROM_EMAIL || "santiagonathan40@gmail.com",
+      },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+    }),
   });
 
-  return {
-    sent: true,
-  };
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Brevo API email failed:", errorText);
+    throw new Error("Brevo API email failed");
+  }
+
+  return { sent: true };
 }
 
 async function sendVerificationCodeEmail(userEmail, code) {
