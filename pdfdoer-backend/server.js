@@ -37,7 +37,6 @@ const __dirname = process.cwd();
 const uploadDir = path.join(__dirname, "uploads");
 const outputDir = path.join(__dirname, "outputs");
 const fontsDir = path.join(__dirname, "assets", "fonts");
-const IS_LINUX = process.platform === "linux";
 
 const LIBREOFFICE_PATH = IS_LINUX
   ? "soffice"
