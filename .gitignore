@@ -10,3 +10,8 @@ pdfdoer-frontend-clean/node_modules/
 dist/
 .DS_Store
 pdfdoer-backend/outputs
+pdfdoer-backend/createAdmin.cjs
+pdfdoer-backend/createAdmin.cjs
+pdfdoer-backend/resetGuestUsage.cjs
+pdfdoer-backend/users.db
+pdfdoer-backend/.env
